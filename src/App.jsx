@@ -23,6 +23,7 @@ function useSounds() {
   const playTick = () => beep(800, 0.06, 'square', 0.025)
   const playWin = () => { beep(740, 0.08, 'triangle', 0.04); setTimeout(() => beep(880, 0.1, 'triangle', 0.04), 90) }
   const playFail = () => beep(180, 0.12, 'sawtooth', 0.035)
+  const playCross = () => { beep(1200, 0.05, 'square', 0.05); setTimeout(()=>beep(900, 0.06, 'square', 0.045), 60) }
   const playArabicClick = () => { beep(700, 0.05, 'triangle', 0.045); setTimeout(() => beep(980, 0.06, 'square', 0.032), 50) }
   const playKeyClick = () => {
     const ctx = ensure()
@@ -98,7 +99,7 @@ function useSounds() {
     try { b.master.disconnect() } catch {}
     bgmRef.current = null
   }
-  return { playTick, playWin, playFail, playArabicClick, playKeyClick, startAmbientForest, stopAmbientForest, startBGM, stopBGM }
+  return { playTick, playWin, playFail, playCross, playArabicClick, playKeyClick, startAmbientForest, stopAmbientForest, startBGM, stopBGM }
 }
 
 function FirefliesOverlay(){
@@ -136,6 +137,14 @@ function winnerOf(b) {
   for (const [a,c,d] of LINES) if (b[a] && b[a]===b[c] && b[a]===b[d]) return b[a]
   if (b.every(Boolean)) return 'draw'
   return null
+}
+
+function winningLineOf(b) {
+  for (let idx=0; idx<LINES.length; idx++){
+    const [a,c,d] = LINES[idx]
+    if (b[a] && b[a]===b[c] && b[a]===b[d]) return idx
+  }
+  return -1
 }
 
 function aiMove(board, ai, human) {
@@ -318,6 +327,7 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
   const [turn,setTurn] = useState('X')
   const [result,setResult] = useState(null)
   const [msg,setMsg] = useState('')
+  const [winLine,setWinLine] = useState(-1)
   const [opp,setOpp] = useState(mode==='single' ? 'Computer' : (role==='host'?'Waiting...':'Host'))
   const chanRef = useRef(null)
   const youAre = useMemo(()=>{
@@ -363,10 +373,11 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
   useEffect(()=>{
     const w = winnerOf(board)
     if (!w) return
-    if (w==='draw') { setResult('draw'); setMsg('Draw'); if (sfxOn) sounds.playFail(); return }
+    if (w==='draw') { setResult('draw'); setMsg('Draw'); setWinLine(-1); if (sfxOn) sounds.playFail(); return }
     setResult(w)
     setMsg((w===youAre?'You win: ':'You lose: ')+w)
-    if (sfxOn) sounds.playWin()
+    setWinLine(winningLineOf(board))
+    if (sfxOn) { sounds.playWin(); setTimeout(()=>sounds.playCross(), 80) }
   },[board, sfxOn])
 
   useEffect(()=>{
@@ -374,7 +385,12 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
     if (turn!== (youAre==='X'?'O':'X')) return
     if (result) return
     const i = aiMove(board, youAre==='X'?'O':'X', youAre)
-    if (i>=0) setTimeout(()=>play(i), 260)
+    if (i>=0) setTimeout(()=>{
+      // AI places its own mark without human turn checks
+      setBoard(b=>{ if (b[i]) return b; const nb=[...b]; nb[i]=(youAre==='X'?'O':'X'); return nb })
+      setTurn(t=> t==='X'?'O':'X')
+      if (sfxOn) sounds.playTick()
+    }, 260)
   },[board, turn, mode, youAre, result])
 
   const play = (i) => {
@@ -386,8 +402,24 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
   }
 
   const reset = () => {
-    setBoard(Array(9).fill(null)); setTurn('X'); setResult(null); setMsg('')
+    setBoard(Array(9).fill(null)); setTurn('X'); setResult(null); setMsg(''); setWinLine(-1)
     if (mode==='multi') chanRef.current?.postMessage({t:'RESET'})
+  }
+
+  const winLineEndpoints = (idx)=>{
+    const ys = [16.66, 50, 83.33]
+    const xs = [16.66, 50, 83.33]
+    switch(idx){
+      case 0: return {x1:10,y1:ys[0],x2:90,y2:ys[0]}
+      case 1: return {x1:10,y1:ys[1],x2:90,y2:ys[1]}
+      case 2: return {x1:10,y1:ys[2],x2:90,y2:ys[2]}
+      case 3: return {x1:xs[0],y1:10,x2:xs[0],y2:90}
+      case 4: return {x1:xs[1],y1:10,x2:xs[1],y2:90}
+      case 5: return {x1:xs[2],y1:10,x2:xs[2],y2:90}
+      case 6: return {x1:10,y1:10,x2:90,y2:90}
+      case 7: return {x1:90,y1:10,x2:10,y2:90}
+      default: return null
+    }
   }
 
   const cells = board.map((v,i)=>{
@@ -409,11 +441,20 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
           <PrimaryButton onClick={()=>{ if (sfxOn) sounds.playTick(); sounds.stopAmbientForest(); sounds.stopBGM(); onExit(); }}>Exit</PrimaryButton>
         </div>
       </div>
-
+      
       <div className="grid md:grid-cols-3 gap-6 items-start">
         <div className="md:col-span-2">
-          <div className="grid grid-cols-3 gap-2 p-3 bg-yellow-400/10 rounded-xl border border-yellow-500/40">
-            {cells}
+          <div className="relative">
+            <div className="grid grid-cols-3 gap-2 p-3 bg-yellow-400/10 rounded-xl border border-yellow-500/40">
+              {cells}
+            </div>
+            {winLine>=0 && (
+              <svg className="absolute inset-0 pointer-events-none" viewBox="0 0 100 100">
+                {(()=>{ const p=winLineEndpoints(winLine); if(!p) return null; return (
+                  <line x1={p.x1} y1={p.y1} x2={p.x2} y2={p.y2} stroke="#facc15" strokeWidth="4" strokeLinecap="round" />
+                )})()}
+              </svg>
+            )}
           </div>
           <div className="mt-4 text-center text-sm text-gray-300">{msg}</div>
         </div>
@@ -444,6 +485,18 @@ function Game({you, mode, piece, role, room, onExit, sounds, sfxOn}){
           )}
         </div>
       </div>
+      {result && (
+        <div className="fixed inset-0 flex items-center justify-center z-40">
+          <div className="absolute inset-0 bg-black/60" />
+          <div className="relative z-10 bg-black/80 border border-yellow-500/50 rounded-2xl px-8 py-6 text-center w-[90%] max-w-sm">
+            <div className="heading-3d-strong text-3xl mb-3">{result==='draw' ? 'Draw' : (result===youAre ? 'You win' : 'You lose')}</div>
+            <div className="mt-4 flex justify-center gap-3">
+              <PrimaryButton onClick={()=>{ if (sfxOn) sounds.playTick(); reset(); }}>Play Again</PrimaryButton>
+              <PrimaryButton onClick={()=>{ if (sfxOn) sounds.playTick(); sounds.stopAmbientForest(); sounds.stopBGM(); onExit(); }}>Exit</PrimaryButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
